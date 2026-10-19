@@ -25,15 +25,15 @@ jobs:
           flutter-version: '3.24.x'
           channel: 'stable'
 
-      - name: Create Basic Android Wrapper
+      - name: Setup Project and Dependencies
         run: |
           flutter create . --platforms=android --org com.ceramicpro
-
-      - name: Install Dependencies
-        run: flutter pub get
+          git checkout lib/main.dart
+          flutter pub add intl sqflite path_provider path
+          flutter pub add flutter_localizations --sdk=flutter
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --no-tree-shake-icons
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
