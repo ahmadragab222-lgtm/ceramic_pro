@@ -190,7 +190,7 @@ class DatabaseHelper {
       JOIN models m ON v.model_id = m.id
     ''';
     if (query.trim().isNotEmpty) {
-      sql += " WHERE m.name LIKE '%$query\%' OR m.code LIKE '\%$query%' OR v.location LIKE '%$query\%' OR v.color LIKE '\%$query%'";
+      sql += " WHERE m.name LIKE '%$query%' OR m.code LIKE '%$query%' OR v.location LIKE '%$query%' OR v.color LIKE '%$query%'";
     }
     sql += " ORDER BY v.id DESC";
     return await db.rawQuery(sql);
@@ -322,4 +322,279 @@ class _StockListScreenState extends State<StockListScreen> {
   }
 
   void _refreshStock() async {
-    final data = await DatabaseHelper.instance.getStockList(query: _search
+    final data = await DatabaseHelper.instance.getStockList(query: _searchCtrl.text);
+    setState(() => _stock = data);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: TextField(
+            controller: _searchCtrl,
+            onChanged: (val) => _refreshStock(),
+            decoration: InputDecoration(
+              hintText: 'بحث باسم الموديل، الكود، أو الرف...',
+              prefixIcon: const Icon(Icons.search),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _stock.isEmpty
+              ? const Center(child: Text('لا توجد أصناف مطابقة.'))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(8),
+                  itemCount: _stock.length,
+                  itemBuilder: (context, i) {
+                    final item = _stock[i];
+                    final isLow = (item['quantity'] as int) <= (item['min_limit'] as int);
+                    return Card(
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: isLow ? Colors.red.shade100 : Colors.blue.shade100,
+                          child: Icon(Icons.layers, color: isLow ? Colors.red : Colors.blue),
+                        ),
+                        title: Text('${item['name']} [${item['code']}]', style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text('اللون: ${item['color']} | الفرز: ${item['grade']} | الرف: [${item['location']}]'),
+                        trailing: Text(
+                          '${item['quantity']} قطعة',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: isLow ? Colors.red : Colors.green.shade800,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class MovementScreen extends StatefulWidget {
+  const MovementScreen({super.key});
+
+  @override
+  State<MovementScreen> createState() => _MovementScreenState();
+}
+
+class _MovementScreenState extends State<MovementScreen> {
+  final _formKey = GlobalKey<FormState>();
+  List<Map<String, dynamic>> _items = [];
+  int? _selectedVariantId;
+  String _selectedType = 'صرف مبيعات';
+  final TextEditingController _qtyCtrl = TextEditingController();
+  final TextEditingController _reasonCtrl = TextEditingController();
+
+  final List<String> _transTypes = ['صرف مبيعات', 'وارد من الفرز', 'مرتجع للمخزن', 'هالك أو كسر', 'تسوية جرد'];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadItems();
+  }
+
+  void _loadItems() async {
+    final data = await DatabaseHelper.instance.getStockList();
+    setState(() {
+      _items = data;
+      if (_items.isNotEmpty) _selectedVariantId = _items.first['id'] as int;
+    });
+  }
+
+  void _submit() async {
+    if (!_formKey.currentState!.validate() || _selectedVariantId == null) return;
+
+    final qty = int.parse(_qtyCtrl.text.trim());
+    final res = await DatabaseHelper.instance.executeTransaction(
+      variantId: _selectedVariantId!,
+      transType: _selectedType,
+      qty: qty,
+      reason: _reasonCtrl.text.trim(),
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res['msg']), backgroundColor: res['success'] ? Colors.green : Colors.red),
+      );
+      if (res['success']) {
+        _qtyCtrl.clear();
+        _reasonCtrl.clear();
+        _loadItems();
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_items.isEmpty) return const Center(child: Text('يرجى إضافة صنف أولاً.'));
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            DropdownButtonFormField<int>(
+              value: _selectedVariantId,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'اختر الصنف', border: OutlineInputBorder()),
+              items: _items.map((it) {
+                return DropdownMenuItem<int>(
+                  value: it['id'] as int,
+                  child: Text('${it['name']} - ${it['color']} (${it['grade']}) - رصيد: ${it['quantity']}'),
+                );
+              }).toList(),
+              onChanged: (v) => setState(() => _selectedVariantId = v),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _selectedType,
+              decoration: const InputDecoration(labelText: 'نوع الحركة', border: OutlineInputBorder()),
+              items: _transTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+              onChanged: (v) => setState(() => _selectedType = v!),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _qtyCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'الكمية بالقطعة', border: OutlineInputBorder()),
+              validator: (v) => (v == null || int.tryParse(v) == null || int.parse(v) <= 0) ? 'أدخل كمية صحيحة' : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _reasonCtrl,
+              decoration: const InputDecoration(labelText: 'رقم الإذن / الفاتورة أو سبب الهالك', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _submit,
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F172A), foregroundColor: Colors.white, minimumSize: const Size.fromHeight(48)),
+              child: const Text('حفظ الحركة'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AddModelScreen extends StatefulWidget {
+  const AddModelScreen({super.key});
+
+  @override
+  State<AddModelScreen> createState() => _AddModelScreenState();
+}
+
+class _AddModelScreenState extends State<AddModelScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _codeCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  final _colorCtrl = TextEditingController();
+  final _locCtrl = TextEditingController();
+  final _qtyCtrl = TextEditingController(text: '0');
+
+  void _save() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    await DatabaseHelper.instance.addModelWithVariant(
+      code: _codeCtrl.text.trim(),
+      name: _nameCtrl.text.trim(),
+      company: 'عام',
+      category: 'بلاط',
+      size: '60x60',
+      color: _colorCtrl.text.trim(),
+      grade: 'فرز أول',
+      location: _locCtrl.text.trim(),
+      initialQty: int.tryParse(_qtyCtrl.text.trim()) ?? 0,
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تمت إضافة الصنف بنجاح!'), backgroundColor: Colors.green));
+      _codeCtrl.clear();
+      _nameCtrl.clear();
+      _colorCtrl.clear();
+      _locCtrl.clear();
+      _qtyCtrl.text = '0';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            TextFormField(controller: _codeCtrl, decoration: const InputDecoration(labelText: 'كود الموديل', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            const SizedBox(height: 10),
+            TextFormField(controller: _nameCtrl, decoration: const InputDecoration(labelText: 'اسم الموديل', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            const SizedBox(height: 10),
+            TextFormField(controller: _colorCtrl, decoration: const InputDecoration(labelText: 'اللون', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            const SizedBox(height: 10),
+            TextFormField(controller: _locCtrl, decoration: const InputDecoration(labelText: 'الرف أو المكان', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            const SizedBox(height: 10),
+            TextFormField(controller: _qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'الرصيد المبدئي', border: OutlineInputBorder())),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _save,
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F172A), foregroundColor: Colors.white, minimumSize: const Size.fromHeight(48)),
+              child: const Text('تسجيل في المخزن'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AlertsScreen extends StatefulWidget {
+  const AlertsScreen({super.key});
+
+  @override
+  State<AlertsScreen> createState() => _AlertsScreenState();
+}
+
+class _AlertsScreenState extends State<AlertsScreen> {
+  List<Map<String, dynamic>> _stagnant = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _load() async {
+    final list = await DatabaseHelper.instance.getStagnantItems();
+    setState(() => _stagnant = list);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _stagnant.isEmpty
+        ? const Center(child: Text('✓ لا توجد أصناف راكدة بالمخزن حالياً.'))
+        : ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: _stagnant.length,
+            itemBuilder: (context, i) {
+              final it = _stagnant[i];
+              return Card(
+                color: Colors.amber.shade50,
+                child: ListTile(
+                  leading: const Icon(Icons.timer, color: Colors.amber),
+                  title: Text('${it['name']} (لون: ${it['color']})'),
+                  subtitle: Text('الرصيد: ${it['quantity']} قطعة'),
+                  trailing: Text('راكد منذ ${it['days_inactive']} يوم', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.brown)),
+                ),
+              );
+            },
+          );
+  }
+}
